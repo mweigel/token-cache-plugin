@@ -1,74 +1,52 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"strings"
-	"io/ioutil"
-	"net/http"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
 )
 
-type ExecCredential struct {
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	Status     map[string]string `json:"status"`
-}
+const tokenCacheFilename = ".token-cache"
 
 func main() {
-	tokenServerURL := os.Getenv("TOKEN_SERVER_URL")
-	if tokenServerURL == "" {
-		fmt.Fprintf(os.Stderr, "TOKEN_SERVER_URL not specified\n")
+	config, err := readConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading configuration: %s\n", err)
 		os.Exit(1)
 	}
 
-	cacheTokens := os.Getenv("CACHE_TOKENS")
-	if cacheTokens == "" {
-		cacheTokens = "false"
-	}
-
 	// Attempt to read a previously cached token before prompting for a username and password.
-	// If this doesn't work attempt to acquire a new token.
-	token, err := ioutil.ReadFile("token-cache")
+	// If this doesn't work then attempt to acquire a new token.
+	token, err := ioutil.ReadFile(tokenCacheFilename)
 	if err != nil {
 		username, password := readCredentials()
-		token, err = requestToken(tokenServerURL, username, password)
-		if err != nil {
+		if token, err = requestToken(config, username, password); err != nil {
 			fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
 			os.Exit(1)
 		}
 	}
 
-	// Write cached token to be used for next time.
-	if cacheTokens == "true" {
-		err := ioutil.WriteFile("token-cache", []byte(token), os.FileMode(0600))
+	// Write token to cache file to be used for next time.
+	if config.cacheTokens == true {
+		err := ioutil.WriteFile(tokenCacheFilename, token, os.FileMode(0600))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Unable to cache token %s\n")
+			fmt.Fprintf(os.Stderr, "Unable to cache token locally: %s\n", err)
 		}
 	}
 
-	execCredential := ExecCredential{
-		APIVersion: "client.authentication.k8s.io/v1alpha1",
-	 	Kind: "ExecCredential",
-	 	Status: map[string]string{
-			"token": string(token),
-	 	},
-	}
-	
-	output, err := json.Marshal(execCredential)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshalling json: %s\n")
+	// Write token to stdout to be used by kubectl.
+	if err = outputToken(token); err != nil {
+		fmt.Fprintf(os.Stderr, "Unable to output token: %s\n", err)
 		os.Exit(1)
 	}
-
-	// fmt.Fprintf(os.Stderr, "%s\n", output)
-	// fmt.Fprintf(os.Stderr, "%s\n", oldoutput)
-	fmt.Printf("%s", output)
-	// fmt.Printf("%s", oldoutput)
 }
 
-// Plugin must write prompts to stderr.
 func readCredentials() (username, password string) {
 	fmt.Fprintf(os.Stderr, "Please enter username: \n")
 	fmt.Fscanf(os.Stdin, "%s", &username)
@@ -79,15 +57,16 @@ func readCredentials() (username, password string) {
 	return strings.TrimSpace(username), strings.TrimSpace(password)
 }
 
-func requestToken(server, username, password string) (token []byte, err error) {
+func requestToken(config Config, username, password string) (token []byte, err error) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
+				InsecureSkipVerify: config.skipTLSVerification,
 			},
 		},
 	}
-	req, err := http.NewRequest("GET", server, nil)
+
+	req, err := http.NewRequest("GET", config.tokenServerURL, nil)
 	req.SetBasicAuth(username, password)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -95,6 +74,49 @@ func requestToken(server, username, password string) (token []byte, err error) {
 	}
 	defer resp.Body.Close()
 
-	bodyText, err := ioutil.ReadAll(resp.Body)
-	return bodyText, nil
+	return ioutil.ReadAll(resp.Body)
+}
+
+func outputToken(token []byte) error {
+	execCredential := ExecCredential{
+		APIVersion: "client.authentication.k8s.io/v1alpha1",
+		Kind:       "ExecCredential",
+		Status: map[string]string{
+			"token": string(token),
+		},
+	}
+
+	output, err := json.Marshal(execCredential)
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Printf("%s", output)
+	return err
+}
+
+func readConfig() (config Config, err error) {
+	config.tokenServerURL = os.Getenv("TOKEN_SERVER_URL")
+	if config.tokenServerURL == "" {
+		return config, errors.New("TOKEN_SERVER_URL not specified")
+	}
+
+	cacheTokens := os.Getenv("CACHE_TOKENS")
+	if cacheTokens == "" {
+		cacheTokens = "false"
+	}
+	if config.cacheTokens, err = strconv.ParseBool(cacheTokens); err != nil {
+		return config, errors.New("Invalid value specified for CACHE_TOKENS")
+	}
+
+	config.caCert = os.Getenv("CA_CERT")
+	skipTLSVerification := os.Getenv("SKIP_TLS_VERIFICATION")
+	if skipTLSVerification == "" {
+		skipTLSVerification = "false"
+	}
+	if config.skipTLSVerification, err = strconv.ParseBool(skipTLSVerification); err != nil {
+		return config, errors.New("Invalid value specified for SKIP_TLS_VERIFICATION")
+	}
+
+	return config, nil
 }

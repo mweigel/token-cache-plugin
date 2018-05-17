@@ -29,13 +29,17 @@ users:
 
       # Environment variables to set when executing the plugin. Optional.
       env:
+        # URL of service responsible for issuing bearer tokens. Required.
       - name: TOKEN_SERVER_URL
         value: "https://127.0.0.1:443/ldapAuth"
+
+        # Path to CA certificate used to verify token server's certificate.
+        # If not specified default certificate store will be used. Optional.
+      - name: CA_CERT
+        value: "/path/to/ca-cert"
+
+        # Whether to cache tokens locally for reuse. Default true. Optional.
       - name: CACHE_TOKENS
         value: "true"
 
-      # Arguments to pass when executing the plugin. Optional.
-      args:
-      - "arg1"
-      - "arg2"
 ```
