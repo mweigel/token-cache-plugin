@@ -23,11 +23,8 @@ users:
 
       # API version to use when encoding and decoding the ExecCredentials
       # resource. Required.
-      #
-      # The API version returned by the plugin MUST match the version encoded.
       apiVersion: "client.authentication.k8s.io/v1alpha1"
 
-      # Environment variables to set when executing the plugin. Optional.
       env:
         # URL of service responsible for issuing bearer tokens. Required.
       - name: TOKEN_SERVER_URL
