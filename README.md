@@ -33,13 +33,17 @@ users:
       - name: TOKEN_SERVER_URL
         value: "https://127.0.0.1:443/ldapAuth"
 
+        # Whether to cache tokens locally for reuse. Default true. Optional.
+      - name: CACHE_TOKENS
+        value: "true"
+
         # Path to CA certificate used to verify token server's certificate.
         # If not specified default certificate store will be used. Optional.
       - name: CA_CERT
         value: "/path/to/ca-cert"
 
-        # Whether to cache tokens locally for reuse. Default true. Optional.
-      - name: CACHE_TOKENS
-        value: "true"
-
+        # Whether to skip verification of the token server's certificate.
+        # Default false. Optional.
+      - name: SKIP_TLS_VERIFICATION
+        value: "false"
 ```
