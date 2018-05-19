@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -33,7 +34,7 @@ func main() {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "Token found - reviewing: %s\n", err)
-		ok, err := reviewToken(token)
+		ok, err := reviewToken(config)
 		if ok == false || err != nil {
 			fmt.Fprintf(os.Stderr, "Token invalid - requesting new token: %s\n", err)
 			username, password := readCredentials()
@@ -59,16 +60,17 @@ func main() {
 	}
 }
 
-func reviewToken(token []byte) (ok bool, err error) {
+func reviewToken(config Config) (ok bool, err error) {
 	token, err := ioutil.ReadFile(tokenCacheFilename)
 	if err != nil {
 		return false, err
 	}
 
+	client := &http.Client{}
 	req, err := http.NewRequest("POST", config.tokenServerURL, bytes.NewReader(token))
 	resp, err := client.Do(req)
 	if err != nil {
-		return token, err
+		return false, err
 	}
 	defer resp.Body.Close()
 
@@ -76,6 +78,9 @@ func reviewToken(token []byte) (ok bool, err error) {
 	if err != nil {
 		return false, err
 	}
+
+	fmt.Fprintf(os.Stderr, "%s\n", string(output))
+	return ok, nil
 }
 
 func readCredentials() (username, password string) {
