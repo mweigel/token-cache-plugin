@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -13,33 +13,48 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-const tokenFilename = ".k8s-last-token"
+var cfg = config{}
+
+func init() {
+	flag.StringVar(&cfg.tokenRequestEndpoint, "token-request-endpoint", "", "help message for flagname")
+	flag.StringVar(&cfg.tokenReviewEndpoint, "token-review-endpoint", "", "help message for flagname")
+	flag.StringVar(&cfg.caCert, "ca-cert", "", "help message for flagname")
+	flag.StringVar(&cfg.tokenPath, "token-path", "", "help message for flagname")
+	flag.BoolVar(&cfg.skipTLSVerification, "skip-tls-verification", false, "help message for flagname")
+	flag.BoolVar(&cfg.cacheTokens, "cache-tokens", true, "help message for flagname")
+
+	if cfg.tokenPath == "" {
+		currentUser, err := user.Current()
+		if err != nil {
+			os.Exit(1)
+		}
+		cfg.tokenPath = filepath.Join(currentUser.HomeDir, ".k8s-last-token")
+	}
+}
 
 func main() {
+	flag.Parse()
+
 	// Log messages must be written to stderr as kubectl is expecting execCredential on stdout.
 	logger := log.New(os.Stderr, "", 0)
-	config, err := readConfig()
-	if err != nil {
-		logger.Fatalf("Error reading configuration: %s\n", err)
-	}
-	client, err := getHTTPClient(config)
+
+	client, err := getHTTPClient()
 	if err != nil {
 		logger.Fatalf("Error creating HTTP client: %s\n", err)
 	}
 
 	// Attempt to read and use a previously cached token before prompting for a username and password.
-	token, err := ioutil.ReadFile(config.tokenPath)
+	token, err := ioutil.ReadFile(cfg.tokenPath)
 	if err != nil {
 		logger.Println(err)
 	}
 
-	valid, err := reviewToken(config, client, token)
+	valid, err := reviewToken(client, token)
 	if err != nil {
 		logger.Println(err)
 	}
@@ -48,13 +63,13 @@ func main() {
 		if err = readCredentials(&username, &password); err != nil {
 			logger.Fatalf("Error reading credentials: %s\n", err)
 		}
-		if token, err = requestToken(config, client, username, password); err != nil {
+		if token, err = requestToken(client, username, password); err != nil {
 			logger.Fatalf("Error requesting token: %s\n", err)
 		}
 
 		// Write token to file to be used next time kubectl is run unless caching is disabled.
-		if config.tokenPath != "" {
-			if err = ioutil.WriteFile(config.tokenPath, token, os.FileMode(0600)); err != nil {
+		if cfg.tokenPath != "" {
+			if err = ioutil.WriteFile(cfg.tokenPath, token, os.FileMode(0600)); err != nil {
 				logger.Println(err)
 			}
 		}
@@ -68,7 +83,7 @@ func main() {
 
 // Review token using the same endpoint that K8s will also use.
 // https://kubernetes.io/docs/admin/authentication/#webhook-token-authentication
-func reviewToken(config config, client *http.Client, token []byte) (bool, error) {
+func reviewToken(client *http.Client, token []byte) (bool, error) {
 	tokenReviewRequest := &tokenReviewRequest{
 		APIVersion: "client.authentication.k8s.io/v1beta",
 		Kind:       "TokenReview",
@@ -81,7 +96,7 @@ func reviewToken(config config, client *http.Client, token []byte) (bool, error)
 		return false, err
 	}
 
-	req, err := http.NewRequest("POST", config.tokenServerURL+"/authenticate", bytes.NewReader(output))
+	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(output))
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, err
@@ -107,8 +122,8 @@ func reviewToken(config config, client *http.Client, token []byte) (bool, error)
 }
 
 // Request a token from token service.
-func requestToken(config config, client *http.Client, username, password string) (token []byte, err error) {
-	req, err := http.NewRequest("GET", config.tokenServerURL+"/ldapAuth", nil)
+func requestToken(client *http.Client, username, password string) (token []byte, err error) {
+	req, err := http.NewRequest("GET", cfg.tokenRequestEndpoint, nil)
 	req.SetBasicAuth(username, password)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -153,44 +168,13 @@ func readCredentials(username, password *string) error {
 	return nil
 }
 
-// Read configuration from environment variables set by kubectl from kubeconfig.
-// https://kubernetes.io/docs/admin/authentication/#configuration
-func readConfig() (config config, err error) {
-	config.tokenServerURL = os.Getenv("TOKEN_SERVER_URL")
-	if config.tokenServerURL == "" {
-		return config, errors.New("TOKEN_SERVER_URL not specified")
-	}
-
-	// Set default path for cached tokens if not specified.
-	if path, ok := os.LookupEnv("TOKEN_PATH"); !ok {
-		currentUser, err := user.Current()
-		if err != nil {
-			return config, errors.New("Error getting current user")
-		}
-		config.tokenPath = filepath.Join(currentUser.HomeDir, tokenFilename)
-	} else {
-		config.tokenPath = path
-	}
-
-	config.caCert = os.Getenv("CA_CERT")
-	skipTLSVerification := os.Getenv("SKIP_TLS_VERIFICATION")
-	if skipTLSVerification == "" {
-		skipTLSVerification = "false"
-	}
-	if config.skipTLSVerification, err = strconv.ParseBool(skipTLSVerification); err != nil {
-		return config, errors.New("Invalid value specified for SKIP_TLS_VERIFICATION")
-	}
-
-	return config, nil
-}
-
-func getHTTPClient(config config) (*http.Client, error) {
+func getHTTPClient() (*http.Client, error) {
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: config.skipTLSVerification,
+		InsecureSkipVerify: cfg.skipTLSVerification,
 	}
 
-	if config.caCert != "" {
-		caCert, err := ioutil.ReadFile(config.caCert)
+	if cfg.caCert != "" {
+		caCert, err := ioutil.ReadFile(cfg.caCert)
 		if err != nil {
 			return nil, err
 		}

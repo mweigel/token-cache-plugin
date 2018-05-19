@@ -40,8 +40,10 @@ type k8suser struct {
 // Config populated by environment variables from kubeconfig file.
 // https://kubernetes.io/docs/admin/authentication/#configuration
 type config struct {
-	tokenServerURL      string
-	tokenPath           string
-	caCert              string
-	skipTLSVerification bool
+	tokenRequestEndpoint string
+	tokenReviewEndpoint  string
+	caCert               string
+	skipTLSVerification  bool
+	cacheTokens          bool
+	tokenPath            string
 }
