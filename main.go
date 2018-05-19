@@ -3,140 +3,107 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-const tokenCacheFilename = ".token-cache"
+const tokenFilename = ".k8s-last-token"
 
 func main() {
+	// Log messages must be written to stderr as kubectl is expecting execCredential on stdout.
+	logger := log.New(os.Stderr, "", 0)
 	config, err := readConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading configuration: %s\n", err)
-		os.Exit(1)
+		logger.Fatalf("Error reading configuration: %s\n", err)
 	}
 
-	// Attempt to read a previously cached token before prompting for a username and password.
-	// If this doesn't work then attempt to acquire a new token.
-	var username, password string
-	token, err := ioutil.ReadFile(tokenCacheFilename)
+	client, err := getHTTPClient(config)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading token - requesting new token: %s\n", err)
-		err := readCredentials(&username, &password)
-		if token, err = requestToken(config, username, password); err != nil {
-			fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
-			os.Exit(1)
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Token found - reviewing: %s\n", err)
-		ok, err := reviewToken(config)
-		if ok == false || err != nil {
-			fmt.Fprintf(os.Stderr, "Token invalid - requesting new token: %s\n", err)
-			err := readCredentials(&username, &password)
-			if token, err = requestToken(config, username, password); err != nil {
-				fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
-				os.Exit(1)
-			}
-		}
+		logger.Fatalf("Error creating HTTP client: %s\n", err)
 	}
 
-	// Write token to cache file to be used for next time.
-	if config.cacheTokens == true {
-		err := ioutil.WriteFile(tokenCacheFilename, token, os.FileMode(0600))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Unable to cache token locally: %s\n", err)
+	// Attempt to read and use a previously cached token before prompting for a username and password.
+	token, err := ioutil.ReadFile(config.tokenPath)
+	if err != nil {
+		logger.Println(err)
+	}
+
+	if !reviewToken(config, client, token) {
+		var username, password string
+		if err = readCredentials(&username, &password); err != nil {
+			logger.Fatalf("Error reading credentials: %s\n", err)
+		}
+		if token, err = requestToken(config, client, username, password); err != nil {
+			logger.Fatalf("Error requesting token: %s\n", err)
+		}
+
+		// Write token to file to be used next time kubectl is run unless caching is disabled.
+		if config.tokenPath != "" {
+			if err = ioutil.WriteFile(config.tokenPath, token, os.FileMode(0600)); err != nil {
+				logger.Println(err)
+			}
 		}
 	}
 
 	// Write token to stdout to be used by kubectl.
 	if err = outputToken(token); err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to output token: %s\n", err)
-		os.Exit(1)
+		logger.Fatalf("Unable to output token: %s\n", err)
 	}
 }
 
-func reviewToken(config Config) (ok bool, err error) {
-	token, err := ioutil.ReadFile(tokenCacheFilename)
-	if err != nil {
-		return false, err
-	}
-
-	tokenReviewRequest := &TokenReviewRequest{
+func reviewToken(config config, client *http.Client, token []byte) bool {
+	tokenReviewRequest := &tokenReviewRequest{
 		APIVersion: "client.authentication.k8s.io/v1beta",
 		Kind:       "TokenReview",
-		Spec:        map[string]string {
+		Spec: map[string]string{
 			"token": string(token),
 		},
 	}
 	output, err := json.Marshal(tokenReviewRequest)
 	if err != nil {
-		return false, err
+		return false
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: config.skipTLSVerification,
-			},
-		},
-	}
-	req, err := http.NewRequest("POST", "https://127.0.0.1/authenticate", bytes.NewReader(output))
+	req, err := http.NewRequest("POST", config.tokenServerURL+"/authenticate", bytes.NewReader(output))
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, err
+		return false
 	}
 	defer resp.Body.Close()
 
-	fmt.Fprintf(os.Stderr, "response %d\n", resp.Status)
-	data, _ := ioutil.ReadAll(resp.Body)
-	tokenResponse := TokenReviewResponse{}
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+
+	tokenResponse := tokenReviewResponse{}
 	err = json.Unmarshal(data, &tokenResponse)
 	if err != nil {
-		return false, err
+		return false
 	}
 
-	fmt.Fprintf(os.Stderr, "%s\n", string(data))
-	if tokenResponse.Status.Authenticated {
-		return true, nil
+	if !tokenResponse.Status.Authenticated {
+		return false
 	}
 
-	return false, nil
+	return true
 }
 
-func readCredentials(username, password *string) error {
-	fmt.Fprintf(os.Stderr, "username: ")
-	fmt.Fscanf(os.Stdin, "%s", username)
-
-	fmt.Fprintf(os.Stderr, "password: ")
-	p, err := terminal.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		return err
-	}
-
-	*password = string(p)
-	fmt.Fprintf(os.Stderr, "%s %s\n", *username, *password)
-
-	return nil
-}
-
-func requestToken(config Config, username, password string) (token []byte, err error) {
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: config.skipTLSVerification,
-			},
-		},
-	}
-
-	req, err := http.NewRequest("GET", config.tokenServerURL, nil)
+// Request a token from token service.
+func requestToken(config config, client *http.Client, username, password string) (token []byte, err error) {
+	req, err := http.NewRequest("GET", config.tokenServerURL+"/ldapAuth", nil)
 	req.SetBasicAuth(username, password)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -147,8 +114,10 @@ func requestToken(config Config, username, password string) (token []byte, err e
 	return ioutil.ReadAll(resp.Body)
 }
 
+// Return token to kubectl on stdout.
+// https://kubernetes.io/docs/admin/authentication/#input-and-output-formats
 func outputToken(token []byte) error {
-	execCredential := ExecCredential{
+	execCredential := execCredential{
 		APIVersion: "client.authentication.k8s.io/v1alpha1",
 		Kind:       "ExecCredential",
 		Status: map[string]string{
@@ -161,22 +130,41 @@ func outputToken(token []byte) error {
 		return err
 	}
 
-	_, err = fmt.Printf("%s", output)
+	fmt.Printf("%s", output)
 	return err
 }
 
-func readConfig() (config Config, err error) {
+func readCredentials(username, password *string) error {
+	fmt.Fprintf(os.Stderr, "username: ")
+	fmt.Fscanf(os.Stdin, "%s", username)
+
+	fmt.Fprintf(os.Stderr, "password: ")
+	p, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return err
+	}
+	*password = string(p)
+
+	return nil
+}
+
+// Read configuration from environment variables set by kubectl from kubeconfig.
+// https://kubernetes.io/docs/admin/authentication/#configuration
+func readConfig() (config config, err error) {
 	config.tokenServerURL = os.Getenv("TOKEN_SERVER_URL")
 	if config.tokenServerURL == "" {
 		return config, errors.New("TOKEN_SERVER_URL not specified")
 	}
 
-	cacheTokens := os.Getenv("CACHE_TOKENS")
-	if cacheTokens == "" {
-		cacheTokens = "false"
-	}
-	if config.cacheTokens, err = strconv.ParseBool(cacheTokens); err != nil {
-		return config, errors.New("Invalid value specified for CACHE_TOKENS")
+	// Set default path for cached tokens if not specified.
+	if path, ok := os.LookupEnv("TOKEN_PATH"); !ok {
+		currentUser, err := user.Current()
+		if err != nil {
+			return config, errors.New("Error getting current user")
+		}
+		config.tokenPath = filepath.Join(currentUser.HomeDir, tokenFilename)
+	} else {
+		config.tokenPath = path
 	}
 
 	config.caCert = os.Getenv("CA_CERT")
@@ -189,4 +177,29 @@ func readConfig() (config Config, err error) {
 	}
 
 	return config, nil
+}
+
+func getHTTPClient(config config) (*http.Client, error) {
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: config.skipTLSVerification,
+	}
+
+	if config.caCert != "" {
+		caCert, err := ioutil.ReadFile(config.caCert)
+		if err != nil {
+			return nil, err
+		}
+
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
+
+	return client, nil
 }
