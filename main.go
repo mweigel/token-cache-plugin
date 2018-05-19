@@ -28,7 +28,6 @@ func main() {
 	if err != nil {
 		logger.Fatalf("Error reading configuration: %s\n", err)
 	}
-
 	client, err := getHTTPClient(config)
 	if err != nil {
 		logger.Fatalf("Error creating HTTP client: %s\n", err)
@@ -40,7 +39,11 @@ func main() {
 		logger.Println(err)
 	}
 
-	if !reviewToken(config, client, token) {
+	valid, err := reviewToken(config, client, token)
+	if err != nil {
+		logger.Println(err)
+	}
+	if !valid {
 		var username, password string
 		if err = readCredentials(&username, &password); err != nil {
 			logger.Fatalf("Error reading credentials: %s\n", err)
@@ -63,7 +66,9 @@ func main() {
 	}
 }
 
-func reviewToken(config config, client *http.Client, token []byte) bool {
+// Review token using the same endpoint that K8s will also use.
+// https://kubernetes.io/docs/admin/authentication/#webhook-token-authentication
+func reviewToken(config config, client *http.Client, token []byte) (bool, error) {
 	tokenReviewRequest := &tokenReviewRequest{
 		APIVersion: "client.authentication.k8s.io/v1beta",
 		Kind:       "TokenReview",
@@ -73,32 +78,32 @@ func reviewToken(config config, client *http.Client, token []byte) bool {
 	}
 	output, err := json.Marshal(tokenReviewRequest)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	req, err := http.NewRequest("POST", config.tokenServerURL+"/authenticate", bytes.NewReader(output))
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer resp.Body.Close()
 
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	tokenResponse := tokenReviewResponse{}
 	err = json.Unmarshal(data, &tokenResponse)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	if !tokenResponse.Status.Authenticated {
-		return false
+		return false, err
 	}
 
-	return true
+	return true, nil
 }
 
 // Request a token from token service.
