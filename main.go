@@ -25,10 +25,22 @@ func main() {
 	// If this doesn't work then attempt to acquire a new token.
 	token, err := ioutil.ReadFile(tokenCacheFilename)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading token - requesting new token: %s\n", err)
 		username, password := readCredentials()
 		if token, err = requestToken(config, username, password); err != nil {
 			fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
 			os.Exit(1)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Token found - reviewing: %s\n", err)
+		ok, err := reviewToken(token)
+		if ok == false || err != nil {
+			fmt.Fprintf(os.Stderr, "Token invalid - requesting new token: %s\n", err)
+			username, password := readCredentials()
+			if token, err = requestToken(config, username, password); err != nil {
+				fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -44,6 +56,25 @@ func main() {
 	if err = outputToken(token); err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to output token: %s\n", err)
 		os.Exit(1)
+	}
+}
+
+func reviewToken(token []byte) (ok bool, err error) {
+	token, err := ioutil.ReadFile(tokenCacheFilename)
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequest("POST", config.tokenServerURL, bytes.NewReader(token))
+	resp, err := client.Do(req)
+	if err != nil {
+		return token, err
+	}
+	defer resp.Body.Close()
+
+	output, err := json.Marshal(resp.Body)
+	if err != nil {
+		return false, err
 	}
 }
 
