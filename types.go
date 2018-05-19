@@ -6,8 +6,13 @@ type ExecCredential struct {
 	Status     map[string]string `json:"status"`
 }
 
-/* 
-type TokenReview struct {
+type TokenReviewRequest struct {
+	APIVersion string
+	Kind       string
+	Spec       map[string]string
+}
+
+type TokenReviewResponse struct {
 	APIVersion string
 	Kind       string
 	Status     struct {
@@ -19,7 +24,7 @@ type TokenReview struct {
 			Extra map[string][]string
 		}
 	}
-} */
+}
 
 type Config struct {
 	tokenServerURL      string

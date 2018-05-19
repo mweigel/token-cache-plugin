@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
+	"syscall"
+
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 const tokenCacheFilename = ".token-cache"
@@ -24,10 +26,11 @@ func main() {
 
 	// Attempt to read a previously cached token before prompting for a username and password.
 	// If this doesn't work then attempt to acquire a new token.
+	var username, password string
 	token, err := ioutil.ReadFile(tokenCacheFilename)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading token - requesting new token: %s\n", err)
-		username, password := readCredentials()
+		err := readCredentials(&username, &password)
 		if token, err = requestToken(config, username, password); err != nil {
 			fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
 			os.Exit(1)
@@ -37,7 +40,7 @@ func main() {
 		ok, err := reviewToken(config)
 		if ok == false || err != nil {
 			fmt.Fprintf(os.Stderr, "Token invalid - requesting new token: %s\n", err)
-			username, password := readCredentials()
+			err := readCredentials(&username, &password)
 			if token, err = requestToken(config, username, password); err != nil {
 				fmt.Fprintf(os.Stderr, "Error requesting token: %s\n", err)
 				os.Exit(1)
@@ -66,31 +69,62 @@ func reviewToken(config Config) (ok bool, err error) {
 		return false, err
 	}
 
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", config.tokenServerURL, bytes.NewReader(token))
+	tokenReviewRequest := &TokenReviewRequest{
+		APIVersion: "client.authentication.k8s.io/v1beta",
+		Kind:       "TokenReview",
+		Spec:        map[string]string {
+			"token": string(token),
+		},
+	}
+	output, err := json.Marshal(tokenReviewRequest)
+	if err != nil {
+		return false, err
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: config.skipTLSVerification,
+			},
+		},
+	}
+	req, err := http.NewRequest("POST", "https://127.0.0.1/authenticate", bytes.NewReader(output))
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, err
 	}
 	defer resp.Body.Close()
 
-	output, err := json.Marshal(resp.Body)
+	fmt.Fprintf(os.Stderr, "response %d\n", resp.Status)
+	data, _ := ioutil.ReadAll(resp.Body)
+	tokenResponse := TokenReviewResponse{}
+	err = json.Unmarshal(data, &tokenResponse)
 	if err != nil {
 		return false, err
 	}
 
-	fmt.Fprintf(os.Stderr, "%s\n", string(output))
-	return ok, nil
+	fmt.Fprintf(os.Stderr, "%s\n", string(data))
+	if tokenResponse.Status.Authenticated {
+		return true, nil
+	}
+
+	return false, nil
 }
 
-func readCredentials() (username, password string) {
-	fmt.Fprintf(os.Stderr, "Please enter username: \n")
-	fmt.Fscanf(os.Stdin, "%s", &username)
+func readCredentials(username, password *string) error {
+	fmt.Fprintf(os.Stderr, "username: ")
+	fmt.Fscanf(os.Stdin, "%s", username)
 
-	fmt.Fprintf(os.Stderr, "Please enter password: \n")
-	fmt.Fscanf(os.Stdin, "%s", &password)
+	fmt.Fprintf(os.Stderr, "password: ")
+	p, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return err
+	}
 
-	return strings.TrimSpace(username), strings.TrimSpace(password)
+	*password = string(p)
+	fmt.Fprintf(os.Stderr, "%s %s\n", *username, *password)
+
+	return nil
 }
 
 func requestToken(config Config, username, password string) (token []byte, err error) {
