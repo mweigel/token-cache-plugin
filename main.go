@@ -27,14 +27,6 @@ func init() {
 	flag.StringVar(&cfg.tokenPath, "token-path", "", "Fully qualified path to save and load locally cached tokens")
 	flag.BoolVar(&cfg.skipTLSVerification, "skip-tls-verification", false, "Skip TLS verification of token request and review endpoint certificates")
 	flag.BoolVar(&cfg.cacheTokens, "cache-tokens", true, "Whether to cache tokens returned by the token request endpoint locally")
-
-	if cfg.tokenPath == "" {
-		currentUser, err := user.Current()
-		if err != nil {
-			os.Exit(1)
-		}
-		cfg.tokenPath = filepath.Join(currentUser.HomeDir, ".k8s-last-token")
-	}
 }
 
 func main() {
@@ -42,6 +34,14 @@ func main() {
 
 	// Log messages must be written to stderr as kubectl is expecting execCredential on stdout.
 	logger := log.New(os.Stderr, "", 0)
+
+	if cfg.tokenPath == "" && cfg.cacheTokens {
+		currentUser, err := user.Current()
+		if err != nil {
+			logger.Fatalf("Error setting token-path: %s\n", err)
+		}
+		cfg.tokenPath = filepath.Join(currentUser.HomeDir, ".k8s-last-token")
+	}
 
 	client, err := getHTTPClient()
 	if err != nil {
@@ -68,7 +68,7 @@ func main() {
 		}
 
 		// Write token to file to be used next time kubectl is run unless caching is disabled.
-		if cfg.tokenPath != "" {
+		if cfg.cacheTokens {
 			if err = ioutil.WriteFile(cfg.tokenPath, token, os.FileMode(0600)); err != nil {
 				logger.Println(err)
 			}
@@ -97,18 +97,20 @@ func reviewToken(client *http.Client, token []byte) (bool, error) {
 	}
 
 	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(output))
+	if err != nil {
+		return false, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, err
 	}
 	defer resp.Body.Close()
 
+	tokenResponse := tokenReviewResponse{}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return false, err
 	}
-
-	tokenResponse := tokenReviewResponse{}
 	err = json.Unmarshal(data, &tokenResponse)
 	if err != nil {
 		return false, err
