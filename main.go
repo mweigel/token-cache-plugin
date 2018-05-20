@@ -35,6 +35,7 @@ func main() {
 	// Log messages must be written to stderr as kubectl is expecting execCredential on stdout.
 	logger := log.New(os.Stderr, "", 0)
 
+	// If a path to a token file is not specified and caching is requested set a default.
 	if cfg.tokenPath == "" && cfg.cacheTokens {
 		currentUser, err := user.Current()
 		if err != nil {
@@ -54,11 +55,11 @@ func main() {
 		logger.Println(err)
 	}
 
-	valid, err := reviewToken(client, token)
+	tokenResponse, err := reviewToken(client, token)
 	if err != nil {
 		logger.Println(err)
 	}
-	if !valid {
+	if !tokenResponse.Status.Authenticated {
 		var username, password string
 		if err = readCredentials(&username, &password); err != nil {
 			logger.Fatalf("Error reading credentials: %s\n", err)
@@ -83,71 +84,50 @@ func main() {
 
 // Review token using the same endpoint that K8s will also use.
 // https://kubernetes.io/docs/admin/authentication/#webhook-token-authentication
-func reviewToken(client *http.Client, token []byte) (bool, error) {
-	tokenReviewRequest := &tokenReviewRequest{
-		APIVersion: "client.authentication.k8s.io/v1beta",
-		Kind:       "TokenReview",
-		Spec: map[string]string{
-			"token": string(token),
-		},
-	}
-	output, err := json.Marshal(tokenReviewRequest)
+func reviewToken(client *http.Client, token []byte) (tokenResponse tokenReviewResponse, err error) {
+	body, err := json.Marshal(newTokenReviewRequest(token))
 	if err != nil {
-		return false, err
+		return tokenResponse, err
 	}
 
-	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(output))
+	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(body))
 	if err != nil {
-		return false, err
+		return tokenResponse, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, err
+		return tokenResponse, err
 	}
 	defer resp.Body.Close()
 
-	tokenResponse := tokenReviewResponse{}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return tokenResponse, err
 	}
 	err = json.Unmarshal(data, &tokenResponse)
-	if err != nil {
-		return false, err
-	}
-
-	if !tokenResponse.Status.Authenticated {
-		return false, err
-	}
-
-	return true, nil
+	return tokenResponse, err
 }
 
 // Request a token from token service.
 func requestToken(client *http.Client, username, password string) (token []byte, err error) {
 	req, err := http.NewRequest("GET", cfg.tokenRequestEndpoint, nil)
+	if err != nil {
+		return token, err
+	}
 	req.SetBasicAuth(username, password)
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return token, err
 	}
 	defer resp.Body.Close()
-
 	return ioutil.ReadAll(resp.Body)
 }
 
 // Return token to kubectl on stdout.
 // https://kubernetes.io/docs/admin/authentication/#input-and-output-formats
 func outputToken(token []byte) error {
-	execCredential := execCredential{
-		APIVersion: "client.authentication.k8s.io/v1alpha1",
-		Kind:       "ExecCredential",
-		Status: map[string]string{
-			"token": string(token),
-		},
-	}
-
-	output, err := json.Marshal(execCredential)
+	output, err := json.Marshal(newExecCredential(token))
 	if err != nil {
 		return err
 	}
