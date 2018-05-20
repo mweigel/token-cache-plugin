@@ -57,7 +57,7 @@ type k8suser struct {
 	Extra    map[string][]string
 }
 
-// Config populated by environment variables from kubeconfig file.
+// Config populated by arguments from kubeconfig file.
 // https://kubernetes.io/docs/admin/authentication/#configuration
 type config struct {
 	tokenRequestEndpoint string

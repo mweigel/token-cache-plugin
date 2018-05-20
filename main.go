@@ -132,7 +132,7 @@ func outputToken(token []byte) error {
 		return err
 	}
 
-	fmt.Printf("%s", output)
+	_, err = fmt.Printf("%s", output)
 	return err
 }
 
