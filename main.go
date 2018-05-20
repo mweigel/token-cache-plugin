@@ -85,12 +85,12 @@ func main() {
 // Review token using the same endpoint that K8s will also use.
 // https://kubernetes.io/docs/admin/authentication/#webhook-token-authentication
 func reviewToken(client *http.Client, token []byte) (tokenResponse tokenReviewResponse, err error) {
-	body, err := json.Marshal(newTokenReviewRequest(token))
+	postBody, err := json.Marshal(newTokenReviewRequest(token))
 	if err != nil {
 		return tokenResponse, err
 	}
 
-	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(postBody))
 	if err != nil {
 		return tokenResponse, err
 	}
@@ -100,11 +100,11 @@ func reviewToken(client *http.Client, token []byte) (tokenResponse tokenReviewRe
 	}
 	defer resp.Body.Close()
 
-	data, err := ioutil.ReadAll(resp.Body)
+	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return tokenResponse, err
 	}
-	err = json.Unmarshal(data, &tokenResponse)
+	err = json.Unmarshal(respBody, &tokenResponse)
 	return tokenResponse, err
 }
 
