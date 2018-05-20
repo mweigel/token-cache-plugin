@@ -21,12 +21,12 @@ import (
 var cfg = config{}
 
 func init() {
-	flag.StringVar(&cfg.tokenRequestEndpoint, "token-request-endpoint", "", "help message for flagname")
-	flag.StringVar(&cfg.tokenReviewEndpoint, "token-review-endpoint", "", "help message for flagname")
-	flag.StringVar(&cfg.caCert, "ca-cert", "", "help message for flagname")
-	flag.StringVar(&cfg.tokenPath, "token-path", "", "help message for flagname")
-	flag.BoolVar(&cfg.skipTLSVerification, "skip-tls-verification", false, "help message for flagname")
-	flag.BoolVar(&cfg.cacheTokens, "cache-tokens", true, "help message for flagname")
+	flag.StringVar(&cfg.tokenRequestEndpoint, "token-request-endpoint", "", "URL of endpoint responsible for issuing tokens")
+	flag.StringVar(&cfg.tokenReviewEndpoint, "token-review-endpoint", "", "URL of endpoint responsible for reviewing tokens")
+	flag.StringVar(&cfg.caCert, "ca-cert", "", "Path to CA certificate used to verify token request and review endpoints")
+	flag.StringVar(&cfg.tokenPath, "token-path", "", "Fully qualified path to save and load locally cached tokens")
+	flag.BoolVar(&cfg.skipTLSVerification, "skip-tls-verification", false, "Skip TLS verification of token request and review endpoint certificates")
+	flag.BoolVar(&cfg.cacheTokens, "cache-tokens", true, "Whether to cache tokens returned by the token request endpoint locally")
 
 	if cfg.tokenPath == "" {
 		currentUser, err := user.Current()

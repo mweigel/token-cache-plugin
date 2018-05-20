@@ -25,22 +25,26 @@ users:
       # resource. Required.
       apiVersion: "client.authentication.k8s.io/v1alpha1"
 
-      env:
-        # URL of service responsible for issuing bearer tokens. Required.
-      - name: TOKEN_SERVER_URL
-        value: "https://127.0.0.1:443/ldapAuth"
+      args:
+      # Endpoint responsible for issuing tokens. Defaults to "".
+      - '-token-request-endpoint=https://127.0.0.1:8443/ldapAuth'
 
-        # Whether to cache tokens locally for reuse. Default true. Optional.
-      - name: CACHE_TOKENS
-        value: "true"
+      # Endpoint responsible for reviewing tokens. Defaults to "".
+      - '-token-review-endpoint=https://127.0.0.1:8443/authenticate'
 
-        # Path to CA certificate used to verify token server's certificate.
-        # If not specified default certificate store will be used. Optional.
-      - name: CA_CERT
-        value: "/path/to/ca-cert"
+      # Path to CA certificate used to verify token request and token review endpoints. If not specified
+      # the OS's default certificate store will be used.
+      - '-ca-cert=/path/to/ca.pem'
 
-        # Whether to skip verification of the token server's certificate.
-        # Default false. Optional.
-      - name: SKIP_TLS_VERIFICATION
-        value: "false"
+      # Skip verification of the certificate presented by token request and token review endpoints.
+      # Not recommended for producton environments. Defaults to false.
+      - '-skip-tls-verification=true'
+
+      # Whether to cache tokens returned by the token request endpoint. If tokens aren't cached then
+      # credentials will have to be passed every time kubectl is run. This is meant to be used with
+      # time restricted tokens. Derfaults to true.
+      - '-cache-tokens=false'
+
+      # Path to save locally cached tokens returned by the token request endpoint. Defaults to ~/.k8s-last-token
+      - '-token-path='/fully/qualified/path/to/.token'
 ```
