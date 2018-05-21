@@ -1,7 +1,9 @@
 # token-cache-plugin
+
 Acquire and optionally cache bearer tokens for use with kubectl
 
 # Purpose
+
 Designed to work as a [credential plugin](https://kubernetes.io/docs/admin/authentication/#client-go-credential-plugins) to kubectl that
 acquires a token from [kubernetes ldap](https://github.com/skippie81/kubernetes-ldap) and caches it locally so that users don't have to
 enter their LDAP credentials every time kubectl is run. These tokens expire after a configurable amount of time which offers a balance
@@ -47,4 +49,12 @@ users:
 
       # Path to save locally cached tokens returned by the token request endpoint. Defaults to ~/.k8s-last-token
       - '-token-path='/fully/qualified/path/to/.token'
+```
+
+## Build
+
+Dependencies managed by https://github.com/golang/dep
+
+```bash
+go build
 ```

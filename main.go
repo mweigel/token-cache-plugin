@@ -84,41 +84,43 @@ func main() {
 
 // Review token using the same endpoint that K8s will also use.
 // https://kubernetes.io/docs/admin/authentication/#webhook-token-authentication
-func reviewToken(client *http.Client, token []byte) (tokenResponse tokenReviewResponse, err error) {
+func reviewToken(client *http.Client, token []byte) (tokenReviewResponse, error) {
 	postBody, err := json.Marshal(newTokenReviewRequest(token))
 	if err != nil {
-		return tokenResponse, err
+		return tokenReviewResponse{}, err
 	}
 
 	req, err := http.NewRequest("POST", cfg.tokenReviewEndpoint, bytes.NewReader(postBody))
 	if err != nil {
-		return tokenResponse, err
+		return tokenReviewResponse{}, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return tokenResponse, err
+		return tokenReviewResponse{}, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return tokenResponse, err
+		return tokenReviewResponse{}, err
 	}
-	err = json.Unmarshal(respBody, &tokenResponse)
-	return tokenResponse, err
+
+	res := tokenReviewResponse{}
+	err = json.Unmarshal(respBody, &res)
+	return res, err
 }
 
 // Request a token from token service.
-func requestToken(client *http.Client, username, password string) (token []byte, err error) {
+func requestToken(client *http.Client, username, password string) ([]byte, error) {
 	req, err := http.NewRequest("GET", cfg.tokenRequestEndpoint, nil)
 	if err != nil {
-		return token, err
+		return nil, err
 	}
 	req.SetBasicAuth(username, password)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return token, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	return ioutil.ReadAll(resp.Body)
